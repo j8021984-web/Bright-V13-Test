@@ -1,6 +1,6 @@
 (()=>{'use strict';
 const $=id=>document.getElementById(id), cfg=window.BEAUTY_CONFIG||{}, $all=s=>Array.from(document.querySelectorAll(s));
-const state={db:null,admin:false,mode:'customer',tab:'requests',services:[],staff:[],bookings:[],selected:new Date(),calMode:'month',edit:null,line:{inClient:false,ready:false,idToken:null,displayName:null}};
+const state={db:null,admin:false,mode:'customer',tab:'requests',services:[],staff:[],bookings:[],openWindows:[],selected:new Date(),calMode:'month',edit:null,line:{inClient:false,ready:false,idToken:null,displayName:null}};
 const pad=n=>String(n).padStart(2,'0'),dateKey=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`,atLocal=iso=>new Date(iso).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}),dayLocal=iso=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Taipei',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(iso)),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function msg(s,error=false){$('notice').textContent=s;$('notice').classList.toggle('error',error);$('notice').classList.remove('hidden');window.scrollTo({top:0,behavior:'smooth'});}
 function clearMsg(){$('notice').classList.add('hidden');}
@@ -28,14 +28,26 @@ async function loadTimes(){
  if(!s||!day){slots.innerHTML='<p class="hint">請先選擇服務與日期。</p>';return;}
  slots.innerHTML='<p class="hint">正在讀取空閒時段…</p>';
  try{
-  const busy=await call(state.db.rpc('get_busy_slots',{p_day:day}));if(request!==calState.request)return;
+  const [busy,windows]=await Promise.all([
+   call(state.db.rpc('get_busy_slots',{p_day:day})),
+   call(state.db.rpc('get_open_windows',{p_day:day}))
+  ]);if(request!==calState.request)return;
   let out='';let available=0;
-  for(let h=9;h<=19;h++)for(const min of [0,30]){
-   const t=`${pad(h)}:${pad(min)}`,start=new Date(`${day}T${t}:00+08:00`),end=new Date(start.getTime()+s.duration_minutes*60000);
-   const tooSoon=start.getTime()<Date.now()+3600000,tooLate=end.getTime()>new Date(`${day}T20:00:00+08:00`).getTime();
-   const taken=busy.some(b=>start<new Date(b.end_at)&&end>new Date(b.start_at));
-   const disabled=tooSoon||tooLate||taken;if(!disabled)available++;
-   out+=`<button type="button" class="time-choice" data-cust-time="${t}" ${disabled?'disabled':''}>${t}<small>${disabled?'不可預約':'可預約'}</small></button>`;
+  // 僅顯示店家主動開放的開始時間；跨越關閉時間的服務不可預約。
+  const minutes=t=>Number(t.slice(0,2))*60+Number(t.slice(3,5));
+  for(const window of windows){
+   const open=minutes(window.start_time),close=minutes(window.end_time);
+   for(let m=Math.ceil(open/30)*30;m<close;m+=30){
+    const t=`${pad(Math.floor(m/60))}:${pad(m%60)}`;
+    const start=new Date(`${day}T${t}:00+08:00`);
+    const end=new Date(start.getTime()+s.duration_minutes*60000);
+    const tooSoon=start.getTime()<Date.now()+3600000;
+    const outside=m+s.duration_minutes>close;
+    const taken=busy.some(b=>start<new Date(b.end_at)&&end>new Date(b.start_at));
+    const disabled=tooSoon||outside||taken;
+    if(!disabled)available++;
+    out+=`<button type="button" class="time-choice" data-cust-time="${t}" ${disabled?'disabled':''}>${t}<small>${disabled?'不可預約':'可預約'}</small></button>`;
+   }
   }
   slots.innerHTML=out+(available?'':'<p class="hint">這一天沒有可預約的時段，請選擇其他日期。</p>');
  }catch(e){if(request!==calState.request)return;slots.innerHTML='<p class="hint">無法取得時段，請稍後重試。</p>';fail(e);}
@@ -101,8 +113,8 @@ async function login(e) {
     fail(error);
   }
 }
-async function loadAdmin(){if(!state.admin)return;try{const [services,staff,bookings]=await Promise.all([call(state.db.from('services').select('*').order('category').order('name')),call(state.db.from('staff').select('*').order('name')),call(state.db.from('bookings').select('*').order('start_at',{ascending:true}))]);Object.assign(state,{services,staff,bookings});renderAll();}catch(e){fail(e);}}
-function renderAll(){renderRequests();renderCalendar();renderServices();renderStaff();renderCustomers();}
+async function loadAdmin(){if(!state.admin)return;try{const [services,staff,bookings,openWindows]=await Promise.all([call(state.db.from('services').select('*').order('category').order('name')),call(state.db.from('staff').select('*').order('name')),call(state.db.from('bookings').select('*').order('start_at',{ascending:true})),call(state.db.from('availability_windows').select('*').gte('day',dateKey(new Date())).order('day').order('start_time'))]);Object.assign(state,{services,staff,bookings,openWindows});renderAll();}catch(e){fail(e);}}
+function renderAll(){renderRequests();renderCalendar();renderServices();renderStaff();renderCustomers();renderOpenWindows();}
 function showTab(tab){state.tab=tab;$all('#adminTabs button').forEach(b=>b.classList.toggle('selected',b.dataset.tab===tab));$all('.tab').forEach(p=>p.classList.toggle('hidden',p.id!==tab+'Tab'));if(tab==='calendar')renderCalendar();}
 function renderRequests(){const list=state.bookings.filter(b=>b.status==='pending');$('pendingCount').textContent=`(${list.length})`;$('requestsList').innerHTML=list.length?list.map(b=>`<div class="item"><div><strong>${esc(b.customer_name)} · ${esc(serviceName(b.service_id))}</strong><small>${esc(atLocal(b.start_at))}｜${esc(b.customer_phone)}</small><small>${esc(b.note)}</small></div><div class="inline"><button class="primary" data-action="approve" data-id="${b.id}">核准</button><button class="outline" data-action="reject" data-id="${b.id}">拒絕</button></div></div>`).join(''):'<p class="hint">目前沒有待審核申請。</p>';}
 async function review(id,status){const b=state.bookings.find(x=>x.id===id);if(!b)return;if(!confirm(`確定${status==='approved'?'核准':'拒絕'} ${b.customer_name} 的預約？`))return;try{await call(state.db.from('bookings').update({status}).eq('id',id).eq('status','pending'));await loadAdmin();msg(status==='approved'?'已核准並加入行事曆':'已拒絕申請');}catch(e){fail(e);}}
@@ -112,6 +124,21 @@ const approved=state.bookings.filter(b=>b.status==='approved');$('calendarGrid')
 const items=approved.filter(b=>dayLocal(b.start_at)===key);$('dayBookings').innerHTML=items.length?items.map(b=>`<div class="slot"><strong>${esc(atLocal(b.start_at).slice(-5))} · ${esc(serviceName(b.service_id))}</strong><small>${esc(b.customer_name)}｜${esc(b.customer_phone)}</small><div class="inline"><button class="outline" data-action="editBooking" data-id="${b.id}">編輯</button><button class="danger" data-action="cancel" data-id="${b.id}">取消預約</button></div></div>`).join(''):'<p class="hint">這一天沒有已核准的預約。</p>';}
 function renderServices(){$('servicesList').innerHTML=state.services.map(s=>`<div class="item"><div><strong>${esc(s.category)}｜${esc(s.name)}</strong><small>${s.duration_minutes} 分鐘 · NT$ ${Number(s.price).toLocaleString()} · ${s.active?'上架':'下架'}</small></div><button class="outline" data-action="editService" data-id="${s.id}">編輯</button></div>`).join('');}
 function renderStaff(){$('staffList').innerHTML=state.staff.map(s=>`<div class="item"><div><strong>${esc(s.name)}</strong><small>${s.active?'在職':'停用'}</small></div><button class="outline" data-action="editStaff" data-id="${s.id}">編輯</button></div>`).join('');}
+function renderOpenWindows(){
+ const list=$('openWindowsList');if(!list)return;
+ list.innerHTML=state.openWindows.length?state.openWindows.map(w=>`<div class="item"><div><strong>${esc(w.day)}｜${esc(w.start_time.slice(0,5))}–${esc(w.end_time.slice(0,5))}</strong></div><button type="button" class="danger" data-action="removeWindow" data-id="${esc(w.id)}">刪除</button></div>`).join(''):'<p class="hint">尚未開放時段，顧客目前無法預約。</p>';
+}
+async function addWindow(e){
+ e.preventDefault();
+ const day=$('openDay').value,start=$('openStart').value,end=$('openEnd').value;
+ if(!day||!start||!end||start>=end)return msg('請確認日期與開始、結束時間',true);
+ try{await call(state.db.from('availability_windows').insert({day,start_time:start,end_time:end}));await loadAdmin();msg('已開放時段');}
+ catch(e){fail(e);}
+}
+async function removeWindow(id){
+ if(!confirm('確定移除這段開放時間？既有預約不會被取消。'))return;
+ try{await call(state.db.from('availability_windows').delete().eq('id',id));await loadAdmin();msg('已移除開放時段');}catch(e){fail(e);}
+}
 function renderCustomers(){const byPhone=new Map();state.bookings.forEach(b=>{const x=byPhone.get(b.customer_phone)||{name:b.customer_name,phone:b.customer_phone,count:0,last:''};x.count++;if(b.start_at>x.last)x.last=b.start_at;byPhone.set(b.customer_phone,x);});$('customersList').innerHTML=[...byPhone.values()].map(x=>`<div class="item"><div><strong>${esc(x.name)}</strong><small>${esc(x.phone)}｜${x.count} 筆申請｜最近 ${esc(atLocal(x.last))}</small></div></div>`).join('')||'<p class="hint">尚無顧客紀錄</p>';}
 function field(label,name,type='text',value='',extra=''){return `<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;}
 function openEdit(kind,id=null){const obj=kind==='service'?state.services.find(x=>x.id===id):kind==='staff'?state.staff.find(x=>x.id===id):state.bookings.find(x=>x.id===id);state.edit={kind,id};$('editTitle').textContent=({service:'服務項目',staff:'員工',booking:'預約'})[kind]+(id?'編輯':'新增');$('deleteEdit').classList.toggle('hidden',!id||kind==='booking');let html='';if(kind==='service')html=`<label>類別<select name="category">${['美甲','美睫','紋繡'].map(c=>`<option ${obj?.category===c?'selected':''}>${c}</option>`).join('')}</select></label>`+field('名稱','name','text',obj?.name,'required maxlength="100"')+field('時間（分鐘）','duration_minutes','number',obj?.duration_minutes||60,'required min="15" max="480" step="15"')+field('價格（元）','price','number',obj?.price||0,'required min="0"')+`<label>上架<select name="active"><option value="true" ${obj?.active!==false?'selected':''}>是</option><option value="false" ${obj?.active===false?'selected':''}>否</option></select></label>`;
@@ -122,6 +149,6 @@ async function saveEdit(e){e.preventDefault();const {kind,id}=state.edit,f=new F
 await call(id?state.db.from(table).update(payload).eq('id',id):state.db.from(table).insert(payload));$('editDialog').close();await loadAdmin();msg('儲存成功');}catch(e){fail(e);}}
 async function deleteEdit(){const {kind,id}=state.edit;if(!id||!confirm('確定永久刪除此項目？'))return;try{await call(state.db.from(kind==='service'?'services':'staff').delete().eq('id',id));$('editDialog').close();await loadAdmin();msg('已刪除');}catch(e){fail(e);}}
 async function cancelBooking(id){if(!confirm('確定取消此預約？'))return;try{await call(state.db.from('bookings').update({status:'cancelled'}).eq('id',id));await loadAdmin();msg('預約已取消');}catch(e){fail(e);}}
-function bind(){ $('switchMode').onclick=()=>switchMode(state.mode==='customer'?'admin':'customer');$('bookService').onchange=loadTimes;$('custPrev').onclick=()=>{calState.month=new Date(calState.month.getFullYear(),calState.month.getMonth()-1,1);customerCalendar();};$('custNext').onclick=()=>{calState.month=new Date(calState.month.getFullYear(),calState.month.getMonth()+1,1);customerCalendar();};$('bookingForm').onsubmit=submitBooking;$('loginForm').onsubmit=login;$('logoutBtn').onclick=async()=>{await state.db.auth.signOut();state.admin=false;await syncAuth();};$all('#adminTabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('prevPeriod').onclick=()=>moveDate(-1);$('nextPeriod').onclick=()=>moveDate(1);$('todayBtn').onclick=()=>{state.selected=new Date();renderCalendar();};$('calendarMode').onchange=e=>{state.calMode=e.target.value;renderCalendar();};$('addBooking').onclick=()=>openEdit('booking');$('addService').onclick=()=>openEdit('service');$('addStaff').onclick=()=>openEdit('staff');$('editForm').onsubmit=saveEdit;$('deleteEdit').onclick=deleteEdit;$('closeDialog').onclick=()=>$('editDialog').close();$('copyUrl').onclick=async()=>{try{await navigator.clipboard.writeText(location.href.split('#')[0].split('?')[0]);msg('已複製預約網址');}catch{msg('請手動複製網址列',true);}};document.addEventListener('click',e=>{const cd=e.target.closest('[data-cust-date]');if(cd){$('bookDate').value=cd.dataset.custDate;customerCalendar();loadTimes();return;}const ct=e.target.closest('[data-cust-time]');if(ct&&!ct.disabled){$('bookTime').value=ct.dataset.custTime;$all('.time-choice').forEach(x=>x.classList.toggle('active',x===ct));$('custSelected').textContent=`已選擇：${bookingDate()} ${ct.dataset.custTime}`;return;}const date=e.target.closest('[data-date]');if(date){state.selected=new Date(date.dataset.date+'T12:00:00');renderCalendar();return;}const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset;if(action==='approve')review(id,'approved');if(action==='reject')review(id,'rejected');if(action==='cancel')cancelBooking(id);if(action==='editService')openEdit('service',id);if(action==='editStaff')openEdit('staff',id);if(action==='editBooking')openEdit('booking',id);});}
+function bind(){ $('openWindowForm').onsubmit=addWindow; $('switchMode').onclick=()=>switchMode(state.mode==='customer'?'admin':'customer');$('bookService').onchange=loadTimes;$('custPrev').onclick=()=>{calState.month=new Date(calState.month.getFullYear(),calState.month.getMonth()-1,1);customerCalendar();};$('custNext').onclick=()=>{calState.month=new Date(calState.month.getFullYear(),calState.month.getMonth()+1,1);customerCalendar();};$('bookingForm').onsubmit=submitBooking;$('loginForm').onsubmit=login;$('logoutBtn').onclick=async()=>{await state.db.auth.signOut();state.admin=false;await syncAuth();};$all('#adminTabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('prevPeriod').onclick=()=>moveDate(-1);$('nextPeriod').onclick=()=>moveDate(1);$('todayBtn').onclick=()=>{state.selected=new Date();renderCalendar();};$('calendarMode').onchange=e=>{state.calMode=e.target.value;renderCalendar();};$('addBooking').onclick=()=>openEdit('booking');$('addService').onclick=()=>openEdit('service');$('addStaff').onclick=()=>openEdit('staff');$('editForm').onsubmit=saveEdit;$('deleteEdit').onclick=deleteEdit;$('closeDialog').onclick=()=>$('editDialog').close();$('copyUrl').onclick=async()=>{try{await navigator.clipboard.writeText(location.href.split('#')[0].split('?')[0]);msg('已複製預約網址');}catch{msg('請手動複製網址列',true);}};document.addEventListener('click',e=>{const cd=e.target.closest('[data-cust-date]');if(cd){$('bookDate').value=cd.dataset.custDate;customerCalendar();loadTimes();return;}const ct=e.target.closest('[data-cust-time]');if(ct&&!ct.disabled){$('bookTime').value=ct.dataset.custTime;$all('.time-choice').forEach(x=>x.classList.toggle('active',x===ct));$('custSelected').textContent=`已選擇：${bookingDate()} ${ct.dataset.custTime}`;return;}const date=e.target.closest('[data-date]');if(date){state.selected=new Date(date.dataset.date+'T12:00:00');renderCalendar();return;}const b=e.target.closest('[data-action]');if(!b)return;const {action,id}=b.dataset;if(action==='removeWindow')removeWindow(id);if(action==='approve')review(id,'approved');if(action==='reject')review(id,'rejected');if(action==='cancel')cancelBooking(id);if(action==='editService')openEdit('service',id);if(action==='editStaff')openEdit('staff',id);if(action==='editBooking')openEdit('booking',id);});}
 async function init(){bind();$('studioName').textContent=cfg.studioName||'美業預約管家';$('publicUrl').textContent=location.href.split('?')[0].split('#')[0];if(cfg.lineOfficialUrl){$('lineLink').href=cfg.lineOfficialUrl;$('lineLink').classList.remove('hidden');}const now=new Date();$('bookDate').min=dateKey(now);const max=new Date(now);max.setDate(max.getDate()+90);$('bookDate').max=dateKey(max);$('bookDate').value=dateKey(now);if(!cfg.supabaseUrl||!cfg.supabaseAnonKey){msg('尚未設定 Supabase。請依 README 設定 config.js 後重新部署，才能使用真實預約。',true);$('bookingForm').querySelector('button[type=submit]').disabled=true;return;}if(!window.supabase){msg('Supabase 套件載入失敗，請檢查網路連線。',true);return;}state.db=window.supabase.createClient(cfg.supabaseUrl,cfg.supabaseAnonKey);try{await loadPublic();}catch(e){fail(e);}await initLine();if(new URLSearchParams(location.search).get('admin')==='1')switchMode('admin');}
 init();})();
