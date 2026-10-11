@@ -2,3 +2,18 @@
 
 /* V1.3 顧客月曆與時段 */
 .booking-calendar{display:grid;gap:13px;border:1px solid #eee4ef;border-radius:14px;padding:13px;background:#fdfbfd}.booking-calendar .grid7{gap:5px}.cust-day{padding:9px 0;border:1px solid #eee4ef;background:white;border-radius:10px;min-width:0;color:#3d3141}.cust-day.active,.time-choice.active{background:#6b4c79;color:white;border-color:#6b4c79}.cust-day:disabled{background:#f1edf1;color:#b5aab7;opacity:.65}.time-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.time-choice{background:white;border:1px solid #e2d7e5;display:grid;gap:3px;padding:11px 5px;font-weight:700}.time-choice small{font-size:10px;font-weight:400;color:#39805b}.time-choice.active small{color:white}.time-choice:disabled{background:#f1eef1;color:#a99dac;opacity:1}.time-choice:disabled small{color:#a99dac}.time-grid>.hint{grid-column:1/-1}@media(max-width:380px){.time-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Bright V1.4 calendar management */
+.cal-mini{border-radius:3px;padding:2px 3px;white-space:nowrap}
+.cal-mini.pending{background:#fff1d5;color:#8c5b13}
+.cal-mini.approved{background:#e7f4ea;color:#286a43}
+.booking-badge{font-size:12px;font-weight:700;border-radius:999px;padding:4px 9px;white-space:nowrap}
+.booking-badge.pending{background:#fff1d5;color:#8c5b13}
+.booking-badge.approved{background:#e7f4ea;color:#286a43}
+.booking-badge.cancelled,.booking-badge.rejected{background:#f1edf1;color:#756b77}
+.booking-badge.completed{background:#e5eefb;color:#335e91}
+.slot.booking-pending{border-left-color:#d7a447}
+.slot.booking-cancelled,.slot.booking-rejected{border-left-color:#b9adb9;opacity:.78}
+.booking-actions{margin-top:10px}
+.booking-actions button{padding:8px 10px;font-size:12px}
+@media(max-width:600px){.calday small.cal-mini{font-size:9px;line-height:1.3}.booking-actions{gap:6px}}
